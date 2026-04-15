@@ -8,7 +8,8 @@
 
 | Nguồn | Phương thức ingest | Failure mode chính | Metric / alert |
 |-------|-------------------|-------------------|----------------|
-| … | … | … | … |
+| DB Policy (PostgreSQL) | Export CSV file định kỳ | File rỗng (0 byte), thiếu field | Cảnh báo khi `raw_records` == 0 |
+| Internal Policy API | Giao tiếp qua REST API (GET) | Rate limit, Timeout (Mạng) | Cảnh báo khi HTTP status != 200 |
 
 ---
 
