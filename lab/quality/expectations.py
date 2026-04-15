@@ -112,5 +112,40 @@ def run_expectations(cleaned_rows: List[Dict[str, Any]]) -> Tuple[List[Expectati
         )
     )
 
+    # E7 (mới — Sprint 2): Không có ký tự vô hình (BOM, zero-width) trong chunk_text đã clean.
+    # severity=halt: nếu R7 bỏ sót, expectation này bắt lại trước khi embed → vector store không bị nhiễm.
+    # metric_impact: inject dòng BOM-prefix + --skip-validate → E7 FAIL;
+    #               sau khi rule R7 chạy → E7 PASS; delta rõ ràng qua log expectation.
+    _INVISIBLE_PATTERN = re.compile(r"[\ufeff\u200b\u200c\u200d\u00ad]")
+    bad_invisible = [
+        r
+        for r in cleaned_rows
+        if _INVISIBLE_PATTERN.search(r.get("chunk_text") or "")
+    ]
+    ok7 = len(bad_invisible) == 0
+    results.append(
+        ExpectationResult(
+            "no_invisible_chars_in_chunk_text",
+            ok7,
+            "halt",
+            f"chunks_with_invisible_chars={len(bad_invisible)}",
+        )
+    )
+
+    # E8 (mới — Sprint 2): Độ đa dạng doc_id tối thiểu — ít nhất 3 doc_id khác nhau trong cleaned.
+    # severity=warn: cảnh báo sớm khi pipeline vô tình loại bỏ quá nhiều nguồn dữ liệu.
+    # metric_impact: inject xoá toàn bộ hr_leave_policy → distinct_doc_ids=3 (warn);
+    #               pipeline chuẩn → distinct_doc_ids=4 (pass).
+    distinct_docs = len({(r.get("doc_id") or "") for r in cleaned_rows if r.get("doc_id")})
+    ok8 = distinct_docs >= 3
+    results.append(
+        ExpectationResult(
+            "min_doc_id_diversity",
+            ok8,
+            "warn",
+            f"distinct_doc_ids={distinct_docs} (min=3)",
+        )
+    )
+
     halt = any(not r.passed and r.severity == "halt" for r in results)
     return results, halt
