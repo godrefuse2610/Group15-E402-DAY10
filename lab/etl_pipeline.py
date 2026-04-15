@@ -91,12 +91,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         log("WARN: expectation failed but --skip-validate → tiếp tục embed (chỉ dùng cho demo Sprint 3).")
 
     # Embed
-    embed_ok = cmd_embed_internal(
+    embed_summary = cmd_embed_internal(
         cleaned_path,
         run_id=run_id,
         log=log,
     )
-    if not embed_ok:
+    if not embed_summary:
         return 3
 
     latest_exported = ""
@@ -116,6 +116,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         "cleaned_csv": str(cleaned_path.relative_to(ROOT)),
         "chroma_path": os.environ.get("CHROMA_DB_PATH", "./chroma_db"),
         "chroma_collection": os.environ.get("CHROMA_COLLECTION", "day10_kb"),
+        "embedding_model": embed_summary["model_name"],
+        "embed_snapshot_rows": embed_summary["rows_in_snapshot"],
+        "embed_collection_count_before": embed_summary["previous_collection_count"],
+        "embed_prune_removed": embed_summary["pruned_ids"],
+        "embed_upserted": embed_summary["upserted_ids"],
+        "embed_collection_count_after": embed_summary["final_collection_count"],
     }
     man_path = MAN_DIR / f"manifest_{run_id.replace(':', '-')}.json"
     man_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -128,13 +134,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> bool:
+def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> dict[str, object] | None:
     try:
         import chromadb
         from chromadb.utils import embedding_functions
     except ImportError:
         log("ERROR: chromadb chưa cài. pip install -r requirements.txt")
-        return False
+        return None
 
     db_path = os.environ.get("CHROMA_DB_PATH", str(ROOT / "chroma_db"))
     collection_name = os.environ.get("CHROMA_COLLECTION", "day10_kb")
@@ -143,16 +149,21 @@ def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> bool:
     from transform.cleaning_rules import load_raw_csv as load_csv  # same loader
 
     rows = load_csv(cleaned_csv)
-    if not rows:
-        log("WARN: cleaned CSV rỗng — không embed.")
-        return True
-
     client = chromadb.PersistentClient(path=db_path)
     emb = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
     col = client.get_or_create_collection(name=collection_name, embedding_function=emb)
 
+    try:
+        before_count = int(col.count())
+    except Exception:
+        before_count = 0
+
     ids = [r["chunk_id"] for r in rows]
+    log(f"embed_collection_before={before_count}")
+    log(f"embed_snapshot_rows={len(ids)}")
+
     # Tránh “mồi cũ” trong top-k: xóa id không còn trong cleaned run này (index = snapshot publish).
+    drop: list[str] = []
     try:
         prev = col.get(include=[])
         prev_ids = set(prev.get("ids") or [])
@@ -162,19 +173,38 @@ def cmd_embed_internal(cleaned_csv: Path, *, run_id: str, log) -> bool:
             log(f"embed_prune_removed={len(drop)}")
     except Exception as e:
         log(f"WARN: embed prune skip: {e}")
-    documents = [r["chunk_text"] for r in rows]
-    metadatas = [
-        {
-            "doc_id": r.get("doc_id", ""),
-            "effective_date": r.get("effective_date", ""),
-            "run_id": run_id,
-        }
-        for r in rows
-    ]
-    # Idempotent: upsert theo chunk_id
-    col.upsert(ids=ids, documents=documents, metadatas=metadatas)
-    log(f"embed_upsert count={len(ids)} collection={collection_name}")
-    return True
+    if not rows:
+        log("WARN: cleaned CSV rỗng — publish empty snapshot, chỉ prune collection.")
+    else:
+        documents = [r["chunk_text"] for r in rows]
+        metadatas = [
+            {
+                "doc_id": r.get("doc_id", ""),
+                "effective_date": r.get("effective_date", ""),
+                "exported_at": r.get("exported_at", ""),
+                "run_id": run_id,
+            }
+            for r in rows
+        ]
+        # Idempotent: upsert theo chunk_id
+        col.upsert(ids=ids, documents=documents, metadatas=metadatas)
+        log(f"embed_upsert count={len(ids)} collection={collection_name}")
+
+    try:
+        after_count = int(col.count())
+    except Exception:
+        after_count = max(before_count - len(drop), 0) + len(ids)
+    log(f"embed_collection_after={after_count}")
+    return {
+        "db_path": db_path,
+        "collection_name": collection_name,
+        "model_name": model_name,
+        "rows_in_snapshot": len(ids),
+        "previous_collection_count": before_count,
+        "pruned_ids": len(drop),
+        "upserted_ids": len(ids),
+        "final_collection_count": after_count,
+    }
 
 
 def cmd_freshness(args: argparse.Namespace) -> int:

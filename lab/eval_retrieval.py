@@ -35,6 +35,11 @@ def main() -> int:
         help="CSV kết quả",
     )
     parser.add_argument("--top-k", type=int, default=3)
+    parser.add_argument(
+        "--scenario",
+        default="",
+        help="Nhãn kịch bản để ghi vào CSV (ví dụ: before, after_fix, inject_bad)",
+    )
     args = parser.parse_args()
 
     try:
@@ -66,9 +71,11 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fieldnames = [
+        "scenario",
         "question_id",
         "question",
         "top1_doc_id",
+        "retrieved_doc_ids",
         "top1_preview",
         "contains_expected",
         "hits_forbidden",
@@ -84,6 +91,10 @@ def main() -> int:
             docs = (res.get("documents") or [[]])[0]
             metas = (res.get("metadatas") or [[]])[0]
             top_doc = (metas[0] or {}).get("doc_id", "") if metas else ""
+            all_doc_ids = [
+                (meta or {}).get("doc_id", "")
+                for meta in metas
+            ]
             preview = (docs[0] or "")[:180].replace("\n", " ") if docs else ""
             blob = " ".join(docs).lower()
             must_any = [x.lower() for x in q.get("must_contain_any", [])]
@@ -96,9 +107,11 @@ def main() -> int:
                 top1_expected = "yes" if top_doc == want_top1 else "no"
             w.writerow(
                 {
+                    "scenario": args.scenario,
                     "question_id": q.get("id", ""),
                     "question": text,
                     "top1_doc_id": top_doc,
+                    "retrieved_doc_ids": "|".join(doc_id for doc_id in all_doc_ids if doc_id),
                     "top1_preview": preview,
                     "contains_expected": "yes" if ok_any else "no",
                     "hits_forbidden": "yes" if bad_forb else "no",

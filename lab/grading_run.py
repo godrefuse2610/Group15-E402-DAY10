@@ -42,6 +42,9 @@ def main() -> int:
         return 1
 
     qpath = Path(args.questions)
+    if not qpath.is_file():
+        print(f"questions not found: {qpath}", file=sys.stderr)
+        return 1
     qs = json.loads(qpath.read_text(encoding="utf-8"))
     db_path = os.environ.get("CHROMA_DB_PATH", str(ROOT / "chroma_db"))
     collection_name = os.environ.get("CHROMA_COLLECTION", "day10_kb")
@@ -61,6 +64,10 @@ def main() -> int:
             docs = (res.get("documents") or [[]])[0]
             metas = (res.get("metadatas") or [[]])[0]
             blob = " ".join(docs).lower()
+            retrieved_doc_ids = [
+                (meta or {}).get("doc_id", "")
+                for meta in metas
+            ]
             must_any = [x.lower() for x in q.get("must_contain_any", [])]
             forbidden = [x.lower() for x in q.get("must_not_contain", [])]
             ok_any = any(m in blob for m in must_any) if must_any else True
@@ -74,6 +81,7 @@ def main() -> int:
                 "id": q.get("id"),
                 "question": text,
                 "top1_doc_id": top_doc,
+                "retrieved_doc_ids": [doc_id for doc_id in retrieved_doc_ids if doc_id],
                 "contains_expected": ok_any,
                 "hits_forbidden": bad_forb,
                 "top1_doc_matches": top1_ok if want_top1 else None,
